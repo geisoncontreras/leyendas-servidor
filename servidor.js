@@ -7,12 +7,15 @@
 //
 // Mensajes (JSON, siempre con "t" = tipo):
 //   cliente → servidor
-//     hola        {pid, nombre}             identificarse (pid = id secreto del teléfono)
+//     hola        {pid, nombre, v}          identificarse (pid = id secreto del teléfono, v = versión del protocolo)
 //     crear       {luchador}                crear sala privada → recibe "sala" {codigo}
 //     unirse      {codigo, luchador}        entrar a una sala con su código
 //     rapida      {luchador}                partida rápida con cualquiera que espere
 //     cancelar    {}                        dejar de esperar
-//     golpe       {q, tejas, dano}          mi golpe (calidad 0..1)
+//     golpe       {q, tejas, dano}          mi golpe de esta ronda (calidad 0..1). Los dos golpean
+//                                           A LA VEZ, cuando quieran; nadie puede ir más de una ronda
+//                                           por delante del otro.
+//     barras      {f, ...}                  cómo van mis barras (se reenvía tal cual al rival)
 //     revancha    {}                        quiero la revancha
 //     salir       {}                        me voy de la partida (pierdo si estaba jugando)
 //     ranking     {}                        pedir el ranking
@@ -21,7 +24,8 @@
 //     error       {msg}
 //     sala        {codigo}
 //     empieza     {yo, primero, jugadores:[{nombre, luchador, victorias}]}
-//     golpe       {lado, q}
+//     golpe       {lado, q, ronda}
+//     barras      {f, ...}                  las barras del rival
 //     revancha    {}                        el rival pide revancha
 //     fin         {ganador, victorias:[v0, v1]}
 //     rival_se_fue {}
@@ -37,9 +41,10 @@ const { nombreValido } = require("./filtro");
 const PUERTO = Number(process.env.PORT || 8080);
 const ARCHIVO = process.env.DATOS || path.join(__dirname, "datos.json");
 const RONDAS = 3;
-const GOLPES = RONDAS * 2;
 const TEJAS = 8;
 const TOP = 50;
+/** Versión del protocolo: la 2 golpea a la vez (sin turnos). */
+const PROTOCOLO = 2;
 
 // --- Jugadores y ranking (se guardan en datos.json) --------------------------
 
@@ -98,7 +103,7 @@ function crearSala(ws, privada) {
 
 function empezar(sala) {
   sala.estado = "jugando";
-  sala.golpes = [];
+  sala.cuenta = [0, 0];
   sala.tejas = [0, 0];
   sala.dano = [0, 0];
   sala.revancha = [false, false];
@@ -107,12 +112,6 @@ function empezar(sala) {
     nombre: w.perfil.nombre, luchador: w.luchador, victorias: w.perfil.victorias,
   }));
   sala.jugadores.forEach((w, i) => enviar(w, { t: "empieza", yo: i, primero: sala.primero, jugadores }));
-}
-
-/** Quién golpea en el golpe número n (0..5): en cada ronda empieza el otro. */
-function turnoDe(sala, n) {
-  const ronda = Math.floor(n / 2);
-  return (sala.primero + ronda + (n % 2)) % 2;
 }
 
 function terminar(sala, ganador) {
@@ -158,6 +157,9 @@ function alRecibir(ws, msg) {
       const pid = String(msg.pid || "");
       const nombre = String(msg.nombre || "").trim();
       if (!/^[a-f0-9]{16,64}$/.test(pid)) return enviar(ws, { t: "error", msg: "Teléfono no reconocido" });
+      if (Number(msg.v || 1) < PROTOCOLO) {
+        return enviar(ws, { t: "error", msg: "Hay una versión nueva del juego. Actualízalo para jugar en línea.", actualizar: true });
+      }
       if (!nombreValido(nombre)) return enviar(ws, { t: "error", msg: "Ese nombre no se puede usar. Prueba con otro." });
       const p = perfiles[pid] || { victorias: 0, jugadas: 0, luchador: "zorro" };
       p.nombre = nombre;
@@ -204,14 +206,15 @@ function alRecibir(ws, msg) {
       const sala = ws.sala;
       if (!sala || sala.estado !== "jugando") return;
       const lado = sala.jugadores.indexOf(ws);
-      const n = sala.golpes.length;
-      if (turnoDe(sala, n) !== lado) return;          // no es su turno
+      // Ya golpeó en esta ronda y el rival todavía no: espera.
+      if (sala.cuenta[lado] >= RONDAS || sala.cuenta[lado] > sala.cuenta[1 - lado]) return;
+      const ronda = sala.cuenta[lado];
+      sala.cuenta[lado] += 1;
       const q = Math.min(Math.max(Number(msg.q) || 0, 0), 1);
-      sala.golpes.push(q);
       sala.tejas[lado] += Math.min(Math.max(Math.floor(Number(msg.tejas) || 0), 0), TEJAS);
       sala.dano[lado] += Math.max(Number(msg.dano) || 0, 0);
-      sala.jugadores.forEach((w) => enviar(w, { t: "golpe", lado, q }));
-      if (sala.golpes.length >= GOLPES) {
+      sala.jugadores.forEach((w) => enviar(w, { t: "golpe", lado, q, ronda }));
+      if (sala.cuenta[0] >= RONDAS && sala.cuenta[1] >= RONDAS) {
         const [a, b] = sala.tejas;
         let ganador = -1;
         if (a !== b) ganador = a > b ? 0 : 1;
@@ -219,6 +222,15 @@ function alRecibir(ws, msg) {
         terminar(sala, ganador);
       }
       return;
+    }
+    case "barras": {
+      const sala = ws.sala;
+      if (!sala || sala.estado !== "jugando") return;
+      const lado = sala.jugadores.indexOf(ws);
+      const f = Math.floor(Number(msg.f) || 0);
+      const v = Math.min(Math.max(Number(msg.v) || 0, 0), 1);
+      const hz = Math.min(Math.max(Number(msg.hz) || 0, 0), 3);
+      return enviar(sala.jugadores[1 - lado], { t: "barras", f, v, hz });
     }
     case "revancha": {
       const sala = ws.sala;

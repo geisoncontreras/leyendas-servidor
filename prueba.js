@@ -42,16 +42,24 @@ function comprobar(cond, texto) {
 }
 
 async function duelo(a, b, empiezaA, empiezaB, qa, qb) {
-  // a y b ya recibieron "empieza"; juegan los 6 golpes en el orden del servidor.
-  const primero = empiezaA.primero;
-  for (let n = 0; n < 6; n++) {
-    const lado = (primero + Math.floor(n / 2) + (n % 2)) % 2;
-    const quien = lado === empiezaA.yo ? a : b;
-    const q = lado === empiezaA.yo ? qa : qb;
-    quien.enviar({ t: "golpe", q, tejas: Math.round(q * 8), dano: q * 100 });
-    const ga = await a.esperar("golpe");
-    const gb = await b.esperar("golpe");
-    if (ga.lado !== lado || gb.lado !== lado || ga.q !== q) throw new Error("golpe mal repartido");
+  // a y b ya recibieron "empieza"; golpean a la vez en cada ronda.
+  const yoA = empiezaA.yo;
+  for (let r = 0; r < 3; r++) {
+    a.enviar({ t: "golpe", q: qa, tejas: Math.round(qa * 8), dano: qa * 100 });
+    if (r === 0) {
+      // A intenta golpear dos veces seguidas: el servidor no le deja adelantarse.
+      a.enviar({ t: "golpe", q: 1, tejas: 8, dano: 999 });
+      b.enviar({ t: "barras", f: 1, v: 0.5, hz: 0.7 });
+      const bar = await a.esperar("barras");
+      if (bar.f !== 1 || bar.hz !== 0.7) throw new Error("barras mal reenviadas");
+    }
+    b.enviar({ t: "golpe", q: qb, tejas: Math.round(qb * 8), dano: qb * 100 });
+    for (let k = 0; k < 2; k++) {
+      const ga = await a.esperar("golpe");
+      const gb = await b.esperar("golpe");
+      if (ga.lado !== gb.lado || ga.ronda !== r) throw new Error("golpe mal repartido " + JSON.stringify(ga));
+      if (ga.lado === yoA && ga.q !== qa) throw new Error("A se adelantó una ronda");
+    }
   }
   return [await a.esperar("fin"), await b.esperar("fin")];
 }
@@ -62,11 +70,13 @@ async function duelo(a, b, empiezaA, empiezaB, qa, qb) {
   const a = await cliente("A");
   const b = await cliente("B");
 
-  a.enviar({ t: "hola", pid: a.pid, nombre: "Pendejo" });
+  a.enviar({ t: "hola", pid: a.pid, nombre: "Viejo" });
+  comprobar((await a.esperar("error")).actualizar === true, "pide actualizar a los juegos viejos");
+  a.enviar({ t: "hola", pid: a.pid, nombre: "Pendejo", v: 2 });
   comprobar((await a.esperar("error")).msg.includes("nombre"), "rechaza nombres groseros");
-  a.enviar({ t: "hola", pid: a.pid, nombre: "Geison" });
+  a.enviar({ t: "hola", pid: a.pid, nombre: "Geison", v: 2 });
   comprobar((await a.esperar("bienvenida")).nombre === "Geison", "acepta el nombre Geison");
-  b.enviar({ t: "hola", pid: b.pid, nombre: "Zorro Rayo" });
+  b.enviar({ t: "hola", pid: b.pid, nombre: "Zorro Rayo", v: 2 });
   await b.esperar("bienvenida");
 
   // Sala con código
@@ -81,12 +91,8 @@ async function duelo(a, b, empiezaA, empiezaB, qa, qb) {
   comprobar(ea.yo !== eb.yo && ea.primero === eb.primero, "los dos reciben el inicio");
   comprobar(ea.jugadores[eb.yo].nombre === "Zorro Rayo", "A ve el nombre de su rival");
 
-  // B golpea fuera de turno: se ignora
-  const fuera = ea.primero === ea.yo ? b : a;
-  fuera.enviar({ t: "golpe", q: 1, tejas: 8, dano: 999 });
-
   let [fa, fb] = await duelo(a, b, ea, eb, 0.95, 0.4);
-  comprobar(fa.ganador === ea.yo && fb.ganador === ea.yo, "gana el que rompió más tejas");
+  comprobar(fa.ganador === ea.yo && fb.ganador === ea.yo, "golpes a la vez: gana el que rompió más tejas");
   comprobar(fa.victorias[ea.yo] === 1, "se suma la victoria");
 
   // Revancha
