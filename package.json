@@ -1,0 +1,9 @@
+{
+  "name": "leyendas-del-puno-servidor",
+  "version": "1.0.0",
+  "description": "Servidor del modo en línea de Leyendas del Puño (salas, partida rápida y ranking)",
+  "main": "servidor.js",
+  "scripts": { "start": "node servidor.js", "test": "node prueba.js" },
+  "engines": { "node": ">=18" },
+  "dependencies": { "ws": "8.18.0" }
+}
