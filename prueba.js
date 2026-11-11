@@ -9,7 +9,7 @@ const WebSocket = require("ws");
 
 const PUERTO = 18080 + Math.floor(Math.random() * 1000);
 const srv = spawn(process.execPath, [path.join(__dirname, "servidor.js")], {
-  env: { ...process.env, PORT: String(PUERTO), DATOS: path.join(os.tmpdir(), `lp_${PUERTO}.json`) },
+  env: { ...process.env, PAUSA_FINAL: "0", PORT: String(PUERTO), DATOS: path.join(os.tmpdir(), `lp_${PUERTO}.json`) },
   stdio: "inherit",
 });
 
@@ -123,7 +123,78 @@ async function duelo(a, b, empiezaA, empiezaB, qa, qb) {
   comprobar(r.top[0].nombre === "Geison" && r.top[0].victorias === 2 && r.yo.puesto === 1, "ranking: Geison 1º con 2 victorias");
   comprobar(r.top[1].nombre === "Zorro Rayo" && r.top[1].victorias === 1, "ranking: Zorro Rayo 2º con 1 victoria");
 
+  // Torneo de 4
+  const c = await cliente("C");
+  const d = await cliente("D");
+  c.enviar({ t: "hola", pid: c.pid, nombre: "Coneja", v: 2 });
+  await c.esperar("bienvenida");
+  d.enviar({ t: "hola", pid: d.pid, nombre: "Toro", v: 2 });
+  await d.esperar("bienvenida");
+  a.enviar({ t: "crear_torneo", luchador: "zorro" });
+  const t0 = await a.esperar("torneo");
+  comprobar(/^\d{4}$/.test(t0.codigo) && t0.jugadores.length === 1, `crea torneo con código ${t0.codigo}`);
+  for (const x of [b, c, d]) x.enviar({ t: "unirse", codigo: t0.codigo, luchador: "kiko" });
+  let st;
+  do { st = await a.esperar("torneo"); } while (st.estado !== "semifinales");
+  comprobar(st.jugadores.length === 4 && st.semis.length === 2, "con 4 jugadores empiezan las semifinales");
+  const todos = { 0: a, 1: b, 2: c, 3: d };
+  const porNombre = {};
+  [a, b, c, d].forEach((x, i) => { porNombre[["Geison", "Zorro Rayo", "Coneja", "Toro"][i]] = x; });
+  const semis = st.semis.map((par) => par.map((i) => porNombre[st.jugadores[i].nombre]));
+  // Primera semifinal: juegan; segunda: uno se va en medio.
+  const [s1a, s1b] = semis[0];
+  const [s2a, s2b] = semis[1];
+  const e1a = await s1a.esperar("empieza"); const e1b = await s1b.esperar("empieza");
+  comprobar(e1a.torneo === "semifinal", "el duelo dice que es semifinal");
+  await s2a.esperar("empieza"); await s2b.esperar("empieza");
+  await duelo(s1a, s1b, e1a, e1b, 0.9, 0.2);       // gana s1a
+  s2b.enviar({ t: "salir" });                       // s2a pasa a la final
+  await s2a.esperar("fin");
+  const ef1 = await s1a.esperar("empieza");
+  const ef2 = await s2a.esperar("empieza");
+  comprobar(ef1.torneo === "final" && ef2.torneo === "final", "los dos ganadores juegan la final");
+  await duelo(s1a, s2a, ef1, ef2, 0.3, 0.8);        // gana s2a
+  let fin;
+  do { fin = await s1a.esperar("torneo"); } while (fin.estado !== "fin");
+  const camp = fin.jugadores[fin.campeon].nombre;
+  comprobar(porNombre[camp] === s2a, `campeón del torneo: ${camp}`);
+
+  // Partida de 4 a la vez
+  const e = await cliente("E");
+  e.enviar({ t: "hola", pid: e.pid, nombre: "Viejito", v: 2 });
+  await e.esperar("bienvenida");
+  for (const x of [a, b, c, d]) x.enviar({ t: "hola", pid: x.pid, nombre: x === a ? "Geison" : x === b ? "Zorro Rayo" : x === c ? "Coneja" : "Toro", v: 3 });
+  for (const x of [a, b, c, d]) await x.esperar("bienvenida");
+  a.enviar({ t: "crear", luchador: "zorro", max: 4 });
+  const s4 = await a.esperar("sala");
+  comprobar(s4.max === 4, `sala de 4 con código ${s4.codigo}`);
+  e.enviar({ t: "unirse", codigo: s4.codigo, luchador: "kiko" });
+  comprobar((await e.esperar("error")).msg.includes("actualizar"), "un juego viejo no entra a la sala de 4");
+  for (const x of [b, c, d]) x.enviar({ t: "unirse", codigo: s4.codigo, luchador: "kiko" });
+  const ini = await Promise.all([a, b, c, d].map((x) => x.esperar("empieza")));
+  comprobar(ini.every((m) => m.jugadores.length === 4), "empieza la partida de 4");
+  const q4 = [0.9, 0.5, 0.4, 0.2];
+  const cl = [a, b, c, d];
+  for (let r = 0; r < 3; r++) {
+    for (let k = 0; k < 4; k++) {
+      if (r === 2 && k === 3) continue;          // D se va antes de su último golpe
+      const yo = ini[k].yo;
+      cl[k].enviar({ t: "golpe", q: q4[k], tejas: Math.round(q4[k] * 8), dano: q4[k] * 100 });
+    }
+    if (r === 0) {
+      cl[1].enviar({ t: "barras", f: 2, v: 0.8 });
+      const bb = await a.esperar("barras");
+      comprobar(bb.lado === ini[1].yo, "las barras de los demás llegan con su número");
+    }
+    if (r === 2) d.enviar({ t: "salir" });
+    // Cada teléfono espera los golpes de todos antes de la ronda siguiente.
+    for (let k = 0; k < (r === 2 ? 3 : 4); k++) await a.esperar("golpe");
+  }
+  const f4 = await a.esperar("fin");
+  comprobar(f4.ganador === ini[0].yo, "entre 4 gana el que rompió más (aunque uno se fue)");
+  comprobar(f4.victorias[ini[0].yo] >= 2, "ganar entre 4 vale doble");
+
   console.log("TODO BIEN");
-  a.ws.close(); b.ws.close(); srv.kill();
+  srv.kill();
   process.exit(0);
 })().catch((e) => { console.error(e.message); srv.kill(); process.exit(1); });
