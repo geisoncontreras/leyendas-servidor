@@ -26,6 +26,7 @@ function cliente(nombre) {
     ws,
     pid: [...Array(32)].map(() => "0123456789abcdef"[Math.floor(Math.random() * 16)]).join(""),
     enviar: (m) => ws.send(JSON.stringify(m)),
+    limpiar: () => { cola.length = 0; },
     esperar: (t) => new Promise((ok, mal) => {
       const i = cola.findIndex((m) => m.t === t);
       if (i >= 0) return ok(cola.splice(i, 1)[0]);
@@ -190,9 +191,61 @@ async function duelo(a, b, empiezaA, empiezaB, qa, qb) {
     // Cada teléfono espera los golpes de todos antes de la ronda siguiente.
     for (let k = 0; k < (r === 2 ? 3 : 4); k++) await a.esperar("golpe");
   }
-  const f4 = await a.esperar("fin");
+  let f4;
+  do { f4 = await a.esperar("fin"); } while (f4.victorias.length !== 4);   // fuera los "fin" del torneo
   comprobar(f4.ganador === ini[0].yo, "entre 4 gana el que rompió más (aunque uno se fue)");
   comprobar(f4.victorias[ini[0].yo] >= 2, "ganar entre 4 vale doble");
+
+  // Partida de 3 (la empieza quien creó la sala) y torneo de 3 (uno pasa directo a la final)
+  await new Promise((ok) => setTimeout(ok, 300));
+  for (const x of [a, b, c]) x.limpiar();
+  for (const x of [a, b]) x.enviar({ t: "hola", pid: x.pid, nombre: x === a ? "Geison" : "Zorro Rayo", v: 4 });
+  for (const x of [a, b]) await x.esperar("bienvenida");
+  a.enviar({ t: "crear", luchador: "zorro", max: 4 });
+  const s3 = await a.esperar("sala");
+  for (const x of [b, c]) x.enviar({ t: "unirse", codigo: s3.codigo, luchador: "kiko" });
+  let w3;
+  do { w3 = await a.esperar("sala4"); } while (w3.jugadores.length < 3);
+  comprobar(w3.yo === 0, "el que creó la sala es el número 0");
+  b.enviar({ t: "empezar_ya" });                     // no es el dueño: no pasa nada
+  a.enviar({ t: "empezar_ya" });                     // Coneja tiene el juego viejo (v3)
+  comprobar((await a.esperar("error")).msg.includes("actualizar"), "con un juego viejo no se empieza de a 3");
+  c.enviar({ t: "hola", pid: c.pid, nombre: "Coneja", v: 4 });
+  await c.esperar("bienvenida");
+  a.enviar({ t: "empezar_ya" });
+  const ini3 = await Promise.all([a, b, c].map((x) => x.esperar("empieza")));
+  comprobar(ini3.every((m) => m.jugadores.length === 3), "empieza la partida de 3");
+  const q3 = [0.3, 0.9, 0.5];
+  for (let r = 0; r < 3; r++) {
+    [a, b, c].forEach((x, k) => x.enviar({ t: "golpe", q: q3[k], tejas: Math.round(q3[k] * 8), dano: q3[k] * 100 }));
+    for (let k = 0; k < 3; k++) await a.esperar("golpe");
+  }
+  let f3;
+  do { f3 = await a.esperar("fin"); } while (f3.victorias.length !== 3);
+  comprobar(f3.ganador === ini3[1].yo, "entre 3 gana el que rompió más");
+  await new Promise((ok) => setTimeout(ok, 300));
+  for (const x of [a, b, c]) x.limpiar();
+
+  a.enviar({ t: "crear_torneo", luchador: "zorro" });
+  let t3;
+  do { t3 = await a.esperar("torneo"); } while (t3.estado !== "esperando");   // fuera mensajes viejos
+  const cod3 = t3.codigo;
+  for (const x of [b, c]) x.enviar({ t: "unirse", codigo: t3.codigo, luchador: "kiko" });
+  do { t3 = await a.esperar("torneo"); } while (t3.codigo !== cod3 || t3.jugadores.length < 3);
+  a.enviar({ t: "empezar_ya" });
+  do { t3 = await a.esperar("torneo"); } while (t3.codigo !== cod3 || t3.estado === "esperando");
+  comprobar(t3.semis.length === 2 && t3.semis[1].length === 1, "torneo de 3: una semifinal y uno pasa directo");
+  const nom = { Geison: a, "Zorro Rayo": b, Coneja: c };
+  const libre = nom[t3.jugadores[t3.semis[1][0]].nombre];
+  const [p1, p2] = t3.semis[0].map((i) => nom[t3.jugadores[i].nombre]);
+  const es1 = await p1.esperar("empieza"); const es2 = await p2.esperar("empieza");
+  await duelo(p1, p2, es1, es2, 0.9, 0.2);
+  const fin3a = await p1.esperar("empieza"); const fin3b = await libre.esperar("empieza");
+  comprobar(fin3a.torneo === "final" && fin3b.torneo === "final", "el que pasó directo juega la final");
+  await duelo(p1, libre, fin3a, fin3b, 0.2, 0.8);
+  let t3fin;
+  do { t3fin = await libre.esperar("torneo"); } while (t3fin.codigo !== cod3 || t3fin.estado !== "fin");
+  comprobar(nom[t3fin.jugadores[t3fin.campeon].nombre] === libre, "hay campeón en el torneo de 3");
 
   console.log("TODO BIEN");
   srv.kill();

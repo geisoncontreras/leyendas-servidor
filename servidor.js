@@ -18,6 +18,7 @@
 //     barras      {f, ...}                  cómo van mis barras (se reenvía tal cual al rival)
 //     revancha    {}                        quiero la revancha
 //     crear_torneo {luchador}               crear un torneo de 4 (los demás entran con "unirse" y su código)
+//     empezar_ya  {}                        (quien creó la sala de 4 o el torneo) empezar ya con 3 jugadores
 //     salir       {}                        me voy de la partida (pierdo si estaba jugando)
 //     ranking     {}                        pedir el ranking
 //   servidor → cliente
@@ -30,7 +31,7 @@
 //     revancha    {}                        el rival pide revancha
 //     fin         {ganador, victorias:[v0, v1]}
 //     rival_se_fue {}                        (duelo de 2)
-//     sala4       {codigo, jugadores:[nombre]}  quién está en la sala de 4 esperando
+//     sala4       {codigo, jugadores:[nombre], yo}  quién está en la sala de 4 esperando
 //     jugador_se_fue {lado}                  alguien dejó la partida de 4
 //     torneo      {codigo, estado, jugadores:[{nombre, luchador}], semis:[[i,j],[k,l]],
 //                  ganadores:[i|-1, i|-1], campeon:i|-1, yo}   cómo va el torneo
@@ -174,7 +175,8 @@ function crearTorneo(ws) {
 function empezarTorneo(t) {
   t.estado = "semifinales";
   const j = t.jugadores.slice().sort(() => Math.random() - 0.5);
-  t.semis = [[j[0], j[1]], [j[2], j[3]]];
+  // Con 3 jugadores, uno (al azar) pasa directo a la final.
+  t.semis = j.length >= 4 ? [[j[0], j[1]], [j[2], j[3]]] : [[j[0], j[1]], [j[2]]];
   estadoTorneo(t);
   t.semis.forEach((par, i) => duelo(t, par, "semifinal", i));
 }
@@ -287,7 +289,7 @@ function abandonarSala4(sala, ws, yo) {
 
 function avisarSala4(sala) {
   const jugadores = sala.jugadores.map((w) => w.perfil.nombre);
-  sala.jugadores.forEach((w) => enviar(w, { t: "sala4", codigo: sala.codigo, jugadores }));
+  sala.jugadores.forEach((w, i) => enviar(w, { t: "sala4", codigo: sala.codigo, jugadores, yo: i }));
 }
 
 /** ¿Ya golpearon todos los que siguen en la partida sus 3 veces? Gana quien rompió más. */
@@ -396,6 +398,19 @@ function alRecibir(ws, msg) {
       }
       esperandoRapida = crearSala(ws, false);
       return enviar(ws, { t: "buscando" });
+    }
+    case "empezar_ya": {
+      // Quien creó la sala de 4 o el torneo puede empezar con 3 (pedido de Geison).
+      const sala = ws.sala;
+      const t = ws.torneo;
+      const grupo = sala && sala.max > 2 && sala.estado === "esperando" ? sala.jugadores
+        : t && t.estado === "esperando" ? t.jugadores : null;
+      if (!grupo || grupo[0] !== ws || grupo.length < 3) return;
+      if (grupo.some((w) => (w.v || 2) < 4)) {
+        return enviar(ws, { t: "error", msg: "Para jugar de a 3, todos tienen que actualizar el juego." });
+      }
+      if (grupo === t?.jugadores) return empezarTorneo(t);
+      return empezar(sala);
     }
     case "cancelar":
     case "salir":
