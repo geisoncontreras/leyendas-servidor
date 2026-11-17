@@ -247,6 +247,22 @@ async function duelo(a, b, empiezaA, empiezaB, qa, qb) {
   do { t3fin = await libre.esperar("torneo"); } while (t3fin.codigo !== cod3 || t3fin.estado !== "fin");
   comprobar(nom[t3fin.jugadores[t3fin.campeon].nombre] === libre, "hay campeón en el torneo de 3");
 
+  // Lista de salas públicas
+  await new Promise((ok) => setTimeout(ok, 300));
+  for (const x of [a, b, c]) x.limpiar();
+  a.enviar({ t: "crear", luchador: "zorro", max: 2, publica: true });
+  const sp = await a.esperar("sala");
+  b.enviar({ t: "crear", luchador: "kiko", max: 2 });            // privada: no sale en la lista
+  await b.esperar("sala");
+  c.enviar({ t: "salas" });
+  const ls = await c.esperar("salas");
+  comprobar(ls.lista.length === 1 && ls.lista[0].codigo === sp.codigo && ls.lista[0].nombre === "Geison", "la lista muestra solo la sala pública");
+  c.enviar({ t: "unirse", codigo: sp.codigo, luchador: "kiko" });
+  await a.esperar("empieza"); await c.esperar("empieza");
+  b.enviar({ t: "salas" });
+  const ls2 = await b.esperar("salas");
+  comprobar(ls2.lista.length === 0, "una sala llena ya no sale en la lista");
+
   console.log("TODO BIEN");
   srv.kill();
   process.exit(0);

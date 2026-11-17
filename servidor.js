@@ -8,7 +8,9 @@
 // Mensajes (JSON, siempre con "t" = tipo):
 //   cliente → servidor
 //     hola        {pid, nombre, v}          identificarse (pid = id secreto del teléfono, v = versión del protocolo)
-//     crear       {luchador, max}           crear sala privada (max 2, o 4 = los 4 a la vez) → "sala" {codigo, max}
+//     crear       {luchador, max, publica}  crear sala (max 2, o 4 = los 4 a la vez) → "sala" {codigo, max}.
+//                                           publica: true = aparece en la lista de salas para que cualquiera entre
+//     salas       {}                        pedir la lista de salas públicas que esperan jugadores
 //     unirse      {codigo, luchador}        entrar a una sala con su código
 //     rapida      {luchador}                partida rápida con cualquiera que espere
 //     cancelar    {}                        dejar de esperar
@@ -36,6 +38,7 @@
 //     torneo      {codigo, estado, jugadores:[{nombre, luchador}], semis:[[i,j],[k,l]],
 //                  ganadores:[i|-1, i|-1], campeon:i|-1, yo}   cómo va el torneo
 //     empieza también trae {torneo: "semifinal"|"final"} si el duelo es del torneo
+//     salas       {lista:[{codigo, nombre, luchador, max, n}]}  salas públicas abiertas (nombre = quien la creó)
 //     ranking     {top:[{puesto, nombre, luchador, victorias}], yo:{puesto, victorias}}
 "use strict";
 
@@ -345,6 +348,7 @@ function alRecibir(ws, msg) {
       ws.luchador = String(msg.luchador || "zorro").slice(0, 24);
       const max = Number(msg.max) === 4 ? 4 : 2;
       const sala = crearSala(ws, true, max);
+      sala.publica = msg.publica === true;
       enviar(ws, { t: "sala", codigo: sala.codigo, max });
       if (max === 4) avisarSala4(sala);
       return;
@@ -457,6 +461,19 @@ function alRecibir(ws, msg) {
       if (sala.revancha.every(Boolean)) return empezar(sala);
       sala.jugadores.forEach((w, i) => { if (i !== lado) enviar(w, { t: "revancha", lado }); });
       return;
+    }
+    case "salas": {
+      // Lista de salas públicas para escoger (pedido de Geison). Sin chat ni datos
+      // privados: solo el nombre de quien la creó y su luchador.
+      const lista = [];
+      for (const sala of salas.values()) {
+        if (!sala.publica || sala.estado !== "esperando" || sala.jugadores.length >= sala.max) continue;
+        const dueno = sala.jugadores[0];
+        if (!dueno || dueno.readyState !== 1 || dueno === ws) continue;
+        lista.push({ codigo: sala.codigo, nombre: dueno.perfil.nombre, luchador: dueno.luchador, max: sala.max, n: sala.jugadores.length });
+        if (lista.length >= 30) break;
+      }
+      return enviar(ws, { t: "salas", lista });
     }
     case "ranking":
       return enviar(ws, ranking(ws.pid));
