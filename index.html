@@ -110,13 +110,64 @@ body {
 			<div id="status-notice"></div>
 		</div>
 
-		<script src="index.js"></script>
+		<!-- ldp-actualizar -->
+<script>
+// Actualización automática (Leyendas del Puño): esta página es la versión
+// 39. Antes de cargar el juego se pregunta cuál es la última publicada.
+(function () {
+	const VERSION = 39;
+	function aviso(texto) {
+		let d = document.getElementById('ldp-aviso');
+		if (!d) {
+			d = document.createElement('div');
+			d.id = 'ldp-aviso';
+			d.style.cssText = 'position:fixed;inset:0;display:flex;align-items:center;justify-content:center;'
+				+ 'background:#1a0d08;color:#ffd34a;font:bold 28px sans-serif;text-align:center;z-index:99;padding:16px';
+			document.body.appendChild(d);
+		}
+		d.textContent = texto;
+	}
+	// Borra lo que el navegador guardó del juego y vuelve a cargar la página.
+	window.ldpActualizar = async function (nueva) {
+		const llave = 'ldp_intento_' + nueva;
+		try {
+			if (sessionStorage.getItem(llave)) { return false; }   // ya se intentó: no repetir
+			sessionStorage.setItem(llave, '1');
+		} catch (e) { /* sin almacenamiento: igual se intenta una vez */ }
+		aviso('¡Versión nueva! Actualizando…');
+		try {
+			const regs = await navigator.serviceWorker.getRegistrations();
+			await Promise.all(regs.map((r) => r.unregister()));
+		} catch (e) { /* sin service worker */ }
+		try {
+			const keys = await caches.keys();
+			await Promise.all(keys.map((k) => caches.delete(k)));
+		} catch (e) { /* sin caché */ }
+		try { await fetch('index.html', { cache: 'reload' }); } catch (e) { /* sin red */ }
+		location.reload();
+		return true;
+	};
+	// Devuelve una promesa: se cumple cuando se puede arrancar ESTA versión.
+	window.ldpRevisar = async function () {
+		try {
+			const ctl = new AbortController();
+			setTimeout(() => ctl.abort(), 4000);   // sin red o lenta: se juega igual
+			const r = await fetch('version.json?t=' + Date.now(), { cache: 'no-store', signal: ctl.signal });
+			const v = await r.json();
+			if (Number(v.code) > VERSION && await window.ldpActualizar(Number(v.code))) {
+				await new Promise(() => {});   // la página se está recargando
+			}
+		} catch (e) { /* sin red: se juega con esta versión */ }
+	};
+}());
+</script>
+<script src="index.js"></script>
 		<script>
-const GODOT_CONFIG = {"args":[],"canvasResizePolicy":2,"ensureCrossOriginIsolationHeaders":false,"executable":"index","experimentalVK":true,"fileSizes":{"index.pck":35150304,"index.wasm":43699190},"focusCanvas":true,"gdextensionLibs":[],"serviceWorker":"index.service.worker.js"};
+const GODOT_CONFIG = {"args":[],"canvasResizePolicy":2,"ensureCrossOriginIsolationHeaders":false,"executable":"index","experimentalVK":true,"fileSizes":{"index.wasm":43699190,"index.pck?v=39":35157760},"focusCanvas":true,"gdextensionLibs":[],"serviceWorker":"index.service.worker.js","mainPack":"index.pck?v=39"};
 const GODOT_THREADS_ENABLED = false;
 const engine = new Engine(GODOT_CONFIG);
 
-(function () {
+window.ldpRevisar().then(function () {
 	const statusOverlay = document.getElementById('status');
 	const statusProgress = document.getElementById('status-progress');
 	const statusNotice = document.getElementById('status-notice');
@@ -214,7 +265,7 @@ const engine = new Engine(GODOT_CONFIG);
 			setStatusMode('hidden');
 		}, displayFailureNotice);
 	}
-}());
+});
 		</script>
 	</body>
 </html>
